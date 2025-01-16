@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Мой видеочат</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+      background-color: #f0f0f0;
+    }
+    video {
+      width: 45%;
+      margin: 10px;
+      border: 2px solid #ccc;
+      background-color: #000;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 10px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+    }
+    button:disabled {
+      background-color: #ddd;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <h1>Добро пожаловать в мой видеочат!</h1>
+  <video id="localVideo" autoplay muted></video>
+  <video id="remoteVideo" autoplay></video>
+  <br>
+  <button id="startCall">Начать звонок</button>
+
+  <script>
+    const startCallButton = document.getElementById('startCall');
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+
+    let localStream;
+    let peerConnection;
+    let webSocket;
+
+    // Укажите URL вашего WebSocket сервера (например, на Heroku)
+    const socketUrl = 'wss://your-websocket-server-url'; // Замените на URL вашего WebSocket сервера
+    webSocket = new WebSocket(socketUrl);
+
+    const servers = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" } // STUN-сервер Google
+      ]
+    };
+
+    // Соединение WebSocket
+    webSocket.onopen = () => {
+      console.log("Подключено к WebSocket серверу");
+    };
+
+    webSocket.onmessage = async (message) => {
+      const data = JSON.parse(message.data);
+      if (data.offer) {
+        // Если пришло предложение от другого пользователя
+        await handleOffer(data.offer);
+      } else if (data.answer) {
+        // Если пришел ответ на наше предложение
+        await handleAnswer(data.answer);
+      } else if (data.iceCandidate) {
+        // Если пришел ICE-кандидат
+        await handleIceCandidate(data.iceCandidate);
+      }
+    };
+
+    async function startCall() {
+      // Запрос доступа к камере и микрофону
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+
+      // Создаем PeerConnection
+      peerConnection = new RTCPeerConnection(servers);
+
+      // Добавляем локальные медиа-потоки
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+      // Устанавливаем обработчик для получения удаленных потоков
+      peerConnection.ontrack = event => {
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      // Генерируем SDP-предложение
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      // Отправляем предложение через WebSocket
+      webSocket.send(JSON.stringify({ offer: offer }));
+
+      console.log("Ваше предложение:", offer);
+    }
+
+    async function handleOffer(offer) {
+      // Принимаем предложение от другого пользователя
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+      // Создаем ответ
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+
+      // Отправляем ответ через WebSocket
+      webSocket.send(JSON.stringify({ answer: answer }));
+    }
+
+    async function handleAnswer(answer) {
+      // Принимаем ответ от другого пользователя
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+
+    async function handleIceCandidate(candidate) {
+      // Добавляем ICE-кандидата
+      await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+
+    // Добавление ICE-кандидатов
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        // Отправляем кандидата через WebSocket
+        webSocket.send(JSON.stringify({ iceCandidate: event.candidate }));
+      }
+    };
+
+    startCallButton.addEventListener('click', startCall);
+  </script>
+</body>
+</html>
+
